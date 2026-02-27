@@ -151,23 +151,24 @@
     stopTimer();
     timeRemaining = QUESTION_TIME;
 
-    // Snap bar to 100% instantly (no transition), then kick off smooth ticks
     if (UI.timerBar) {
+      // 1. Snap to 100% with no transition
       UI.timerBar.style.transition = 'none';
       UI.timerBar.style.width      = '100%';
-      UI.timerBar.getBoundingClientRect(); // force reflow before re-enabling transition
+      // 2. Force reflow so the browser registers the 100% before animating
+      UI.timerBar.getBoundingClientRect();
+      // 3. One single transition from 100% → 0% over the full question time
+      //    CSS handles all the smoothness — JS never touches width again
+      UI.timerBar.style.transition = `width ${QUESTION_TIME}s linear`;
+      UI.timerBar.style.width      = '0%';
     }
+
     if (UI.timerText) UI.timerText.textContent = String(QUESTION_TIME);
     if (timerWrap)    timerWrap.setAttribute('data-warning', 'false');
 
+    // setInterval only drives the text counter + warning state
     timerId = setInterval(() => {
       timeRemaining -= 1;
-
-      // CSS transition handles the smooth glide between each 1-second step
-      if (UI.timerBar) {
-        UI.timerBar.style.transition = 'width 1s linear';
-        UI.timerBar.style.width      = Math.max(0, (timeRemaining / QUESTION_TIME) * 100) + '%';
-      }
       if (UI.timerText) UI.timerText.textContent = String(Math.max(0, timeRemaining));
       if (timerWrap)    timerWrap.setAttribute('data-warning', timeRemaining <= 5 ? 'true' : 'false');
 
