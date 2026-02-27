@@ -135,7 +135,7 @@
   // ================================================================
 
   function stopTimer() {
-    clearInterval(timerId);
+    cancelAnimationFrame(timerId);
     timerId = null;
   }
 
@@ -150,14 +150,41 @@
     timeRemaining = QUESTION_TIME;
     updateTimerUI();
 
-    timerId = setInterval(() => {
-      timeRemaining -= 1;
-      updateTimerUI();
-      if (timeRemaining <= 0) {
-        stopTimer();
-        onTimeout();
+    const totalMs  = QUESTION_TIME * 1000;
+    const startedAt = performance.now();
+    let lastSecond = QUESTION_TIME;
+
+    function tick(now) {
+      const elapsed   = now - startedAt;
+      const remaining = Math.max(0, totalMs - elapsed);
+
+      // Bar updates every frame — smooth
+      if (UI.timerBar) {
+        UI.timerBar.style.width = (remaining / totalMs * 100) + '%';
       }
-    }, 1000);
+
+      // Text + warning update only when the second changes
+      const secs = Math.ceil(remaining / 1000);
+      if (secs !== lastSecond) {
+        lastSecond    = secs;
+        timeRemaining = secs;
+        if (UI.timerText) UI.timerText.textContent = String(secs);
+        if (timerWrap)    timerWrap.setAttribute('data-warning', secs <= 5 ? 'true' : 'false');
+      }
+
+      if (remaining <= 0) {
+        timeRemaining = 0;
+        if (UI.timerBar)  UI.timerBar.style.width        = '0%';
+        if (UI.timerText) UI.timerText.textContent        = '0';
+        if (timerWrap)    timerWrap.setAttribute('data-warning', 'true');
+        onTimeout();
+        return;
+      }
+
+      timerId = requestAnimationFrame(tick);
+    }
+
+    timerId = requestAnimationFrame(tick);
   }
 
   // ================================================================
