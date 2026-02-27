@@ -8,8 +8,8 @@
   const el  = (name, root = document) => root.querySelector(`[data-quiz-element="${name}"]`);
   const els = (name, root = document) => Array.from(root.querySelectorAll(`[data-quiz-element="${name}"]`));
 
-  function show(node) { if (node) node.setAttribute('data-visibility', 'True'); }
-  function hide(node) { if (node) node.setAttribute('data-visibility', 'False'); }
+  function show(node) { if (node) { node.setAttribute('data-visibility', 'True');  node.removeAttribute('hidden'); } }
+  function hide(node) { if (node) { node.setAttribute('data-visibility', 'False'); } }
 
   function setDisabled(btn, disabled) {
     if (!btn) return;
