@@ -42,19 +42,21 @@
   const restartBtn         = el('restart-btn');
 
   const UI = {
-    progressCurrent: el('progress-current'),
-    progressTotal:   el('progress-total'),
-    scoreDisplay:    el('score-display'),
-    finalScore:      el('final-score'),      // on .wih1-total-score_number
-    timerBar:        el('timer-bar'),
-    timerText:       el('timer-text'),
-    submitBtn:       el('submit-btn'),
-    nextBtn:         el('next-btn'),
-    timeoutNextBtn:  el('timeout-next-btn'),
-    // The correct-answer span inside the timeout overlay
-    // — scoped so it doesn't clash with [data-quiz-element="answer"] option buttons
+    progressCurrent:   el('progress-current'),
+    progressTotal:     el('progress-total'),
+    scoreDisplay:      el('score-display'),
+    finalScore:        el('final-score'),
+    timerBar:          el('timer-bar'),
+    timerText:         el('timer-text'),
+    timeoutNextBtn:    el('timeout-next-btn'),
+    // Scoped to timeout overlay — avoids clashing with answer option buttons
     timeoutAnswerSpan: el('answer', timeoutOverlay),
   };
+
+  // Submit + Next buttons live inside each question block.
+  // Always look them up from the current question so Q2, Q3 etc. work correctly.
+  function getSubmitBtn() { return el('submit-btn', currentQ()); }
+  function getNextBtn()   { return el('next-btn',   currentQ()); }
 
   // ================================================================
   // QUESTIONS
@@ -225,8 +227,8 @@
     resetQuestion(qEl);
     showOnlyQuestion(index);
     updateProgress();
-    setDisabled(UI.submitBtn, true);
-    setDisabled(UI.nextBtn, true);
+    setDisabled(getSubmitBtn(), true);
+    setDisabled(getNextBtn(),   true);
     initHint(qEl);
     startTimer();
   }
@@ -260,7 +262,7 @@
       btn.setAttribute('data-selected', i === index ? 'true' : 'false');
     });
 
-    setDisabled(UI.submitBtn, false);
+    setDisabled(getSubmitBtn(), false);
   }
 
   // ================================================================
@@ -314,8 +316,8 @@
         : `Not quite. The correct answer is ${getCorrectText(qEl)}`;
     }
 
-    setDisabled(UI.submitBtn, true);
-    setDisabled(UI.nextBtn, false);
+    setDisabled(getSubmitBtn(), true);
+    setDisabled(getNextBtn(),   false);
   }
 
   // ================================================================
@@ -335,8 +337,8 @@
       UI.timeoutAnswerSpan.textContent = getCorrectText(qEl);
     }
 
-    setDisabled(UI.submitBtn, true);
-    setDisabled(UI.nextBtn, true);
+    setDisabled(getSubmitBtn(), true);
+    setDisabled(getNextBtn(),   true);
     show(timeoutOverlay);
   }
 
@@ -387,7 +389,11 @@
     questionEls.forEach(q => hide(q));
 
     if (timerWrap) timerWrap.setAttribute('data-warning', 'false');
-    updateTimerUI();
+    if (UI.timerText) UI.timerText.textContent = String(QUESTION_TIME);
+    if (UI.timerBar) {
+      UI.timerBar.style.transition = 'none';
+      UI.timerBar.style.width      = '100%';
+    }
 
     show(screenInstructions);
   }
@@ -416,16 +422,30 @@
   // to avoid the timeout overlay's [data-quiz-element="answer"] span.
   // ================================================================
 
-  function bindAnswerClicks() {
+  function bindQuizClicks() {
+    // Single delegated listener handles answers, submit and next
+    // — works for every question without rebinding
     screenQuiz.addEventListener('click', e => {
+      const qEl = currentQ();
+
+      // Submit
+      if (e.target.closest('[data-quiz-element="submit-btn"]')) {
+        onSubmit();
+        return;
+      }
+
+      // Next
+      if (e.target.closest('[data-quiz-element="next-btn"]')) {
+        const nextBtn = getNextBtn();
+        if (nextBtn && !nextBtn.disabled) goNext();
+        return;
+      }
+
+      // Answer selection
       if (locked) return;
       const btn = e.target.closest('[data-quiz-element="answer"]');
       if (!btn) return;
-
-      // Guard: must be inside the current question, not the timeout overlay
-      const qEl = currentQ();
-      if (!qEl || !qEl.contains(btn)) return;
-
+      if (!qEl || !qEl.contains(btn)) return; // guard against timeout overlay span
       const idx = parseInt(btn.getAttribute('data-answer-index'), 10);
       if (!isNaN(idx)) selectAnswer(idx);
     });
@@ -438,11 +458,9 @@
   function init() {
     indexAnswers();
     setBaseline();
-    bindAnswerClicks();
+    bindQuizClicks();
 
     if (instructionsBtn)   instructionsBtn.addEventListener('click', startQuiz);
-    if (UI.submitBtn)      UI.submitBtn.addEventListener('click', onSubmit);
-    if (UI.nextBtn)        UI.nextBtn.addEventListener('click', goNext);
     if (UI.timeoutNextBtn) UI.timeoutNextBtn.addEventListener('click', goNext);
     if (restartBtn)        restartBtn.addEventListener('click', resetQuiz);
   }
