@@ -260,7 +260,12 @@
     hintBtn.parentNode.replaceChild(fresh, hintBtn);
     fresh.addEventListener('click', () => {
       hintVisible = !hintVisible;
-      hintText.style.display = hintVisible ? 'block' : 'none';
+      if (hintVisible) {
+        hintText.removeAttribute('hidden');
+        hintText.style.display = 'block';
+      } else {
+        hintText.style.display = 'none';
+      }
     });
   }
 
