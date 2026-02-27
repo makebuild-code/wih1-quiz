@@ -71,16 +71,17 @@
 
   function prepareAllQuestions() {
     questionEls.forEach((qEl, index) => {
-      const answerBtns   = getAnswerBtns(qEl);
-      // Read the correct answer index from the question element (authored in Webflow).
-      // This avoids relying on answer-button attributes which Webflow can override to
-      // "false" via IX2 initial states before the script has a chance to read them.
-      const correctIndex = parseInt(qEl.getAttribute('data-correct-answer'), 10);
-      const correctEl    = (!isNaN(correctIndex) && answerBtns[correctIndex])
-                           ? answerBtns[correctIndex]
-                           : answerBtns[0]; // fallback: first answer if attribute missing
-      correctEls[index]  = correctEl;
-      // Nothing to strip — correctness is on the question element, not the answers
+      const answerBtns = getAnswerBtns(qEl);
+
+      // data-quiz-correct="true" is the authoring attribute set in Webflow Designer.
+      // It uses a different name from data-correct so Webflow IX2 (which manages
+      // data-correct as a CSS state and resets it to "false" on page load) never
+      // touches it. Once read, it is immediately stripped so it is never inspectable.
+      const correctEl  = answerBtns.find(b => b.getAttribute('data-quiz-correct') === 'true')
+                         || answerBtns[0];
+      correctEls[index] = correctEl;
+
+      answerBtns.forEach(b => b.removeAttribute('data-quiz-correct'));
     });
   }
 
