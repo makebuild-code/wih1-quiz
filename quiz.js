@@ -212,7 +212,7 @@
     if (feedbackAnswer) feedbackAnswer.textContent = '';
 
     const hintText = el('hint-text', qEl);
-    if (hintText) hintText.hidden = true;
+    if (hintText) hide(hintText);
   }
 
   function updateProgress() {
@@ -254,7 +254,10 @@
     if (!hintBtn || !hintText) return;
     const fresh = hintBtn.cloneNode(true);
     hintBtn.parentNode.replaceChild(fresh, hintBtn);
-    fresh.addEventListener('click', () => { hintText.hidden = !hintText.hidden; });
+    fresh.addEventListener('click', () => {
+      const isVisible = hintText.getAttribute('data-visibility') === 'True';
+      isVisible ? hide(hintText) : show(hintText);
+    });
   }
 
   // ================================================================
