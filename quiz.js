@@ -212,7 +212,7 @@
     if (feedbackAnswer) feedbackAnswer.textContent = '';
 
     const hintText = el('hint-text', qEl);
-    if (hintText) hide(hintText);
+    if (hintText) hintText.style.display = 'none';
   }
 
   function updateProgress() {
@@ -253,15 +253,14 @@
     const hintText = el('hint-text', qEl);
     if (!hintBtn || !hintText) return;
 
-    // Always start hidden — don't trust whatever Webflow set
-    hide(hintText);
+    hintText.style.display = 'none';
     let hintVisible = false;
 
     const fresh = hintBtn.cloneNode(true);
     hintBtn.parentNode.replaceChild(fresh, hintBtn);
     fresh.addEventListener('click', () => {
       hintVisible = !hintVisible;
-      hintVisible ? show(hintText) : hide(hintText);
+      hintText.style.display = hintVisible ? 'block' : 'none';
     });
   }
 
