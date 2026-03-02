@@ -147,12 +147,13 @@
   // ================================================================
 
   function setBaseline() {
-    show(screenInstructions);
-    hide(screenQuiz);
+    show(screenQuiz);          // quiz visible on page load
+    show(screenInstructions);  // instructions overlay sits on top
     hide(screenResults);
     hide(timeoutOverlay);
-    hide(timerWrap);
-    questionEls.forEach(q => hide(q));
+    hide(timerWrap);           // timer hidden until Start is clicked
+    if (UI.scoreDisplay) UI.scoreDisplay.textContent = '0';
+    loadQuestion(0, false);    // load Q1 so it's visible behind instructions, no timer yet
   }
 
   // ================================================================
@@ -225,7 +226,7 @@
     questionEls.forEach((q, i) => i === index ? show(q) : hide(q));
   }
 
-  function loadQuestion(index) {
+  function loadQuestion(index, withTimer = true) {
     currentIndex = index;
     selectedEl   = null;
     locked       = false;
@@ -241,7 +242,7 @@
     setDisabled(getSubmitBtn(), true);
     setDisabled(getNextBtn(),   true);
     initHint(qEl);
-    startTimer();
+    if (withTimer) startTimer();
   }
 
   // ================================================================
@@ -379,15 +380,16 @@
 
     hide(screenResults);
     hide(timeoutOverlay);
-    hide(screenQuiz);
     hide(timerWrap);
-    questionEls.forEach(q => hide(q));
 
     if (timerWrap)    timerWrap.setAttribute('data-warning', 'false');
     if (UI.timerText) UI.timerText.textContent = String(QUESTION_TIME);
     if (UI.timerBar)  { UI.timerBar.style.transition = 'none'; UI.timerBar.style.width = '100%'; }
+    if (UI.scoreDisplay) UI.scoreDisplay.textContent = '0';
 
-    show(screenInstructions);
+    show(screenQuiz);
+    show(screenInstructions);  // instructions back on top
+    loadQuestion(0, false);    // reload Q1 behind instructions, no timer
   }
 
   // ================================================================
@@ -395,16 +397,14 @@
   // ================================================================
 
   function startQuiz() {
-    totalScore   = 0;
-    currentIndex = 0;
-    selectedEl   = null;
-    locked       = false;
+    totalScore = 0;
+    if (UI.scoreDisplay) UI.scoreDisplay.textContent = '0';
 
     hide(screenInstructions);
-    show(screenQuiz);
     show(timerWrap);
-    if (UI.scoreDisplay) UI.scoreDisplay.textContent = '0';
-    loadQuestion(0);
+    // Q1 is already loaded and visible behind the instructions overlay —
+    // just start the timer
+    startTimer();
   }
 
   // ================================================================
