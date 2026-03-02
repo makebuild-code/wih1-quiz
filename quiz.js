@@ -36,6 +36,7 @@
   const timerWrap          = document.querySelector('.wih1-timer_wrap');
   const instructionsBtn    = el('instructions-btn');
   const restartBtn         = el('restart-btn');
+  const resultsWrap        = document.querySelector('.wih1-results_wrap');
 
   const UI = {
     progressCurrent:   el('progress-current'),
@@ -102,13 +103,15 @@
 
   function countUp(el, from, to, duration) {
     if (!el) return;
-    const start = performance.now();
-    (function step(now) {
-      const t      = Math.min((now - start) / duration, 1);
-      const eased  = 1 - Math.pow(1 - t, 3); // ease-out cubic
+    let start = null;
+    function step(now) {
+      if (!start) start = now;
+      const t     = Math.min((now - start) / duration, 1);
+      const eased = 1 - Math.pow(1 - t, 3); // ease-out cubic
       el.textContent = String(Math.round(from + (to - from) * eased));
       if (t < 1) requestAnimationFrame(step);
-    })(start);
+    }
+    requestAnimationFrame(step);
   }
 
   // ================================================================
@@ -307,6 +310,9 @@
       btn.setAttribute('data-locked',  'true');
       btn.setAttribute('data-correct', btn === correctEl ? 'true' : 'false');
     });
+    // Always mark the correct answer as selected so Webflow's highlight
+    // styles fire on it even when the user picked a wrong answer
+    if (correctEl) correctEl.setAttribute('data-selected', 'true');
   }
 
   // ================================================================
@@ -379,7 +385,6 @@
     hide(timerWrap);
     hide(timeoutOverlay);
     show(screenResults);
-    if (UI.finalScore) UI.finalScore.textContent = String(totalScore);
   }
 
   // ================================================================
@@ -462,6 +467,14 @@
     if (instructionsBtn)   instructionsBtn.addEventListener('click', startQuiz);
     if (UI.timeoutNextBtn) UI.timeoutNextBtn.addEventListener('click', goNext);
     if (restartBtn)        restartBtn.addEventListener('click', resetQuiz);
+
+    if (resultsWrap) {
+      new MutationObserver(() => {
+        if (resultsWrap.getAttribute('data-visibility') === 'True') {
+          countUp(UI.finalScore, 0, totalScore, 1000);
+        }
+      }).observe(resultsWrap, { attributeFilter: ['data-visibility'] });
+    }
   }
 
   if (document.readyState === 'loading') {
