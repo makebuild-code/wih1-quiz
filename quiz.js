@@ -278,14 +278,10 @@
     questionEls.forEach((q, i) => {
       if (i === index) {
         show(q);
-        // Restart staggered entrance on each card so it replays every transition
-        ['.wih1-quiz_img-card', '.wih1-quiz_q-card'].forEach(sel => {
-          const card = q.querySelector(sel);
-          if (!card) return;
-          card.style.animation = 'none';
-          card.getBoundingClientRect(); // force reflow
-          card.style.animation = '';
-        });
+        // Restart animation so it plays on every question transition
+        q.style.animation = 'none';
+        q.getBoundingClientRect(); // force reflow
+        q.style.animation = '';
       } else {
         hide(q);
       }
@@ -519,13 +515,10 @@
     style.textContent = `
       @keyframes quiz-question-enter {
         from { opacity: 0; transform: translateY(5%); }
-        to   { opacity: 1; transform: translateY(0);  }
+        to   { opacity: 1; transform: translateY(0);    }
       }
-      [data-quiz-element="question"][data-visibility="True"] .wih1-quiz_img-card {
-        animation: quiz-question-enter 0.8s ease-out both;
-      }
-      [data-quiz-element="question"][data-visibility="True"] .wih1-quiz_q-card {
-        animation: quiz-question-enter 0.8s ease-out 0.15s both;
+      [data-quiz-element="question"][data-visibility="True"] {
+        animation: quiz-question-enter 0.4s ease-out both;
       }
       .wih1-answer_wrap {
         transition: background-color 0.25s ease, border-color 0.25s ease, color 0.25s ease, opacity 0.25s ease, transform 0.2s ease;
