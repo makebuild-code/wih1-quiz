@@ -203,7 +203,8 @@
     timerId = setInterval(() => {
       timeRemaining -= 1;
       if (UI.timerText) UI.timerText.textContent = String(Math.max(0, timeRemaining));
-      if (timerWrap)    timerWrap.setAttribute('data-warning', timeRemaining <= 5 ? 'true' : 'false');
+      if (timerWrap)    timerWrap.setAttribute('data-warning',  timeRemaining <= 5 ? 'true' : 'false');
+      if (timerWrap)    timerWrap.setAttribute('data-critical', timeRemaining <= 3 ? 'true' : 'false');
       if (timeRemaining <= 0) { stopTimer(); onTimeout(); }
     }, 1000);
   }
@@ -213,7 +214,8 @@
     timeRemaining = QUESTION_TIME;
 
     if (UI.timerText) UI.timerText.textContent = String(QUESTION_TIME);
-    if (timerWrap)    timerWrap.setAttribute('data-warning', 'false');
+    if (timerWrap)    timerWrap.setAttribute('data-warning',  'false');
+    if (timerWrap)    timerWrap.setAttribute('data-critical', 'false');
 
     if (UI.timerBar) {
       if (refill) {
@@ -445,7 +447,8 @@
     hide(timeoutOverlay);
     hide(timerWrap);
 
-    if (timerWrap)    timerWrap.setAttribute('data-warning', 'false');
+    if (timerWrap)    timerWrap.setAttribute('data-warning',  'false');
+    if (timerWrap)    timerWrap.setAttribute('data-critical', 'false');
     if (UI.timerText) UI.timerText.textContent = String(QUESTION_TIME);
     if (UI.timerBar)  { UI.timerBar.style.transition = 'none'; UI.timerBar.style.width = '100%'; }
     if (UI.scoreDisplay) UI.scoreDisplay.textContent = '0';
@@ -537,6 +540,9 @@
       }
       .wih1-radio_text {
         transition: color 0.25s ease;
+      }
+      .wih1-timer_wrap[data-critical="true"] [data-quiz-element="timer-bar"] {
+        background-color: #F15A22;
       }
     `;
     document.head.appendChild(style);
