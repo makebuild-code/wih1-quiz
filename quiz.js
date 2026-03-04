@@ -1,35 +1,25 @@
 (function () {
   'use strict';
 
-  // ================================================================
-  // HELPERS
-  // ================================================================
-
+  // ── Helpers ──────────────────────────────────────────────────────
   const el  = (name, root = document) => root.querySelector(`[data-quiz-element="${name}"]`);
   const els = (name, root = document) => Array.from(root.querySelectorAll(`[data-quiz-element="${name}"]`));
 
   function show(node) { if (node) { node.setAttribute('data-visibility', 'True');  node.removeAttribute('hidden'); } }
   function hide(node) { if (node) { node.setAttribute('data-visibility', 'False'); } }
-
   function setDisabled(btn, disabled) {
     if (!btn) return;
     btn.disabled = !!disabled;
     btn.setAttribute('data-disabled', disabled ? 'true' : 'false');
   }
 
-  // ================================================================
-  // CONFIG
-  // ================================================================
-
+  // ── Config ────────────────────────────────────────────────────────
   const screenQuiz = el('screen-quiz');
-  if (!screenQuiz) { console.warn('[Quiz] screen-quiz not found. Aborting.'); return; }
+  if (!screenQuiz) { console.warn('[Quiz] screen-quiz not found.'); return; }
 
   const QUESTION_TIME = parseInt(screenQuiz.dataset.quizQuestionTime, 10) || 15;
 
-  // ================================================================
-  // ELEMENTS
-  // ================================================================
-
+  // ── Elements ──────────────────────────────────────────────────────
   const screenInstructions = el('screen-instructions');
   const screenResults      = el('results');
   const timeoutOverlay     = el('timeout-overlay');
@@ -49,157 +39,92 @@
     timeoutAnswerSpan: el('answer', timeoutOverlay),
   };
 
-  // Look for submit/next inside the current question first, fall back to screen-quiz
-  function getSubmitBtn() { return el('submit-btn', currentQ()) || el('submit-btn', screenQuiz); }
-  function getNextBtn()   { return el('next-btn',   currentQ()) || el('next-btn',   screenQuiz); }
+  const getSubmitBtn = () => el('submit-btn', currentQ()) || el('submit-btn', screenQuiz);
+  const getNextBtn   = () => el('next-btn',   currentQ()) || el('next-btn',   screenQuiz);
 
-  // ================================================================
-  // QUESTIONS
-  // ================================================================
-
+  // ── Questions & correct-answer store ─────────────────────────────
   const questionEls     = els('question');
   const TOTAL_QUESTIONS = questionEls.length;
-  if (!TOTAL_QUESTIONS) { console.warn('[Quiz] No questions found. Aborting.'); return; }
+  if (!TOTAL_QUESTIONS) { console.warn('[Quiz] No questions found.'); return; }
 
-  // ================================================================
-  // CORRECT ANSWER STORE
-  // Correct answer elements are read from data-correct="true" once at
-  // init, then that attribute is immediately stripped from the DOM so
-  // it is never inspectable. Identity is tracked by element reference.
-  // ================================================================
-
-  const correctEls = []; // correctEls[questionIndex] = the correct answer DOM element
+  const correctEls = [];
 
   function prepareAllQuestions() {
     questionEls.forEach((qEl, index) => {
-      const answerBtns = getAnswerBtns(qEl);
-
-      // data-quiz-correct="true" is the authoring attribute set in Webflow Designer.
-      // It uses a different name from data-correct so Webflow IX2 (which manages
-      // data-correct as a CSS state and resets it to "false" on page load) never
-      // touches it. Once read, it is immediately stripped so it is never inspectable.
-      const correctEl  = answerBtns.find(b => b.getAttribute('data-quiz-correct') === 'true')
-                         || answerBtns[0];
-      correctEls[index] = correctEl;
-
-      answerBtns.forEach(b => b.removeAttribute('data-quiz-correct'));
+      const btns = els('answer', qEl);
+      correctEls[index] = btns.find(b => b.getAttribute('data-quiz-correct') === 'true') || btns[0];
+      btns.forEach(b => b.removeAttribute('data-quiz-correct'));
     });
   }
 
-  // ================================================================
-  // STATE
-  // ================================================================
-
+  // ── State ─────────────────────────────────────────────────────────
   let currentIndex  = 0;
-  let selectedEl    = null; // the selected answer DOM element (not an index)
+  let selectedEl    = null;
   let locked        = false;
   let totalScore    = 0;
   let timeRemaining = QUESTION_TIME;
   let timerId       = null;
   let refillTimerId = null;
 
-  // ================================================================
-  // COUNT-UP ANIMATION
-  // ================================================================
+  // ── Helpers ───────────────────────────────────────────────────────
+  const currentQ      = ()    => questionEls[currentIndex] || null;
+  const getAnswerBtns = (qEl) => els('answer', qEl);
+  const getCorrectEl  = ()    => correctEls[currentIndex] || null;
+  const getCorrectText = ()   => { const c = getCorrectEl(); return c ? c.textContent.trim() : ''; };
 
+  // ── Count-up ──────────────────────────────────────────────────────
   function countUp(el, from, to, duration) {
     if (!el) return;
     let start = null;
     function step(now) {
       if (!start) start = now;
-      const t     = Math.min((now - start) / duration, 1);
-      const eased = 1 - Math.pow(1 - t, 3); // ease-out cubic
+      const t = Math.min((now - start) / duration, 1);
+      const eased = 1 - Math.pow(1 - t, 3);
       el.textContent = String(Math.round(from + (to - from) * eased));
       if (t < 1) requestAnimationFrame(step);
     }
     requestAnimationFrame(step);
   }
 
-  // ================================================================
-  // QUESTION HELPERS
-  // ================================================================
-
-  function currentQ() { return questionEls[currentIndex] || null; }
-
-  function getAnswerBtns(qEl) { return els('answer', qEl); }
-
-  function getCorrectEl() { return correctEls[currentIndex] || null; }
-
-  function getCorrectText() {
-    const c = getCorrectEl();
-    return c ? c.textContent.trim() : '';
-  }
-
-  // ================================================================
-  // SHUFFLE
-  // Fisher-Yates shuffle of answer DOM nodes within their parent.
-  // Re-stamps data-answer-index after shuffle.
-  // Called on every question load so order changes each attempt.
-  // ================================================================
-
+  // ── Shuffle ───────────────────────────────────────────────────────
   function shuffleAnswers(qEl) {
     const btns = getAnswerBtns(qEl);
     if (btns.length < 2) return;
     const parent = btns[0].parentElement;
-    if (!parent) return;
-
-    // Fisher-Yates
     for (let i = btns.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       if (i !== j) {
-        const nodeI = btns[i];
-        const nodeJ = btns[j];
-        const afterI = nodeI.nextSibling;
-        parent.insertBefore(nodeI, nodeJ);
-        parent.insertBefore(nodeJ, afterI);
-        // Keep array in sync
+        const afterI = btns[i].nextSibling;
+        parent.insertBefore(btns[i], btns[j]);
+        parent.insertBefore(btns[j], afterI);
         [btns[i], btns[j]] = [btns[j], btns[i]];
       }
     }
-
-    // Re-stamp indexes to reflect new DOM order
     getAnswerBtns(qEl).forEach((btn, i) => btn.setAttribute('data-answer-index', String(i)));
   }
 
-  // ================================================================
-  // BASELINE VISIBILITY
-  // ================================================================
-
-  function setBaseline() {
-    show(screenQuiz);          // quiz visible on page load
-    show(screenInstructions);  // instructions overlay sits on top
-    hide(screenResults);
-    hide(timeoutOverlay);
-    hide(timerWrap);           // timer hidden until Start is clicked
-    if (UI.scoreDisplay) UI.scoreDisplay.textContent = '0';
-    loadQuestion(0, false);    // load Q1 so it's visible behind instructions, no timer yet
-  }
-
-  // ================================================================
-  // TIMER
-  // ================================================================
+  // ── Timer ─────────────────────────────────────────────────────────
+  const REFILL_MS = 400;
 
   function stopTimer() {
     clearInterval(timerId);
-    timerId = null;
-
-    if (refillTimerId !== null) {
-      clearTimeout(refillTimerId);
-      refillTimerId = null;
-    }
-
-    // Freeze bar at current position mid-animation
+    clearTimeout(refillTimerId);
+    timerId = refillTimerId = null;
     if (UI.timerBar) {
-      const currentW = parseFloat(getComputedStyle(UI.timerBar).width);
-      const parentW  = UI.timerBar.parentElement?.offsetWidth || 1;
+      const pct = (parseFloat(getComputedStyle(UI.timerBar).width) / (UI.timerBar.parentElement?.offsetWidth || 1) * 100).toFixed(3);
       UI.timerBar.style.transition = 'none';
-      UI.timerBar.style.width      = (currentW / parentW * 100).toFixed(3) + '%';
+      UI.timerBar.style.width = pct + '%';
     }
   }
 
-  const REFILL_MS = 400;
-
-  function beginInterval() {
+  function beginCountdown() {
+    if (UI.timerBar) {
+      UI.timerBar.style.transition = 'none';
+      UI.timerBar.style.width = '100%';
+      UI.timerBar.getBoundingClientRect();
+      UI.timerBar.style.transition = `width ${QUESTION_TIME}s linear`;
+      UI.timerBar.style.width = '0%';
+    }
     timerId = setInterval(() => {
       timeRemaining -= 1;
       if (UI.timerText) UI.timerText.textContent = String(Math.max(0, timeRemaining));
@@ -212,58 +137,31 @@
   function startTimer(refill = false) {
     stopTimer();
     timeRemaining = QUESTION_TIME;
-
     if (UI.timerText) UI.timerText.textContent = String(QUESTION_TIME);
-    if (timerWrap)    timerWrap.setAttribute('data-warning',  'false');
+    if (timerWrap)    timerWrap.setAttribute('data-warning', 'false');
     if (timerWrap)    timerWrap.setAttribute('data-critical', 'false');
-
-    if (UI.timerBar) {
-      if (refill) {
-        // Bar is frozen at wherever it stopped — animate from there back to full
-        UI.timerBar.getBoundingClientRect(); // force reflow
-        UI.timerBar.style.transition = `width ${REFILL_MS}ms ease-out`;
-        UI.timerBar.style.width      = '100%';
-
-        refillTimerId = setTimeout(() => {
-          refillTimerId = null;
-          if (!UI.timerBar) return;
-          UI.timerBar.style.transition = 'none';
-          UI.timerBar.style.width      = '100%';
-          UI.timerBar.getBoundingClientRect();
-          UI.timerBar.style.transition = `width ${QUESTION_TIME}s linear`;
-          UI.timerBar.style.width      = '0%';
-          beginInterval();
-        }, REFILL_MS);
-      } else {
-        UI.timerBar.style.transition = 'none';
-        UI.timerBar.style.width      = '100%';
-        UI.timerBar.getBoundingClientRect(); // force reflow
-        UI.timerBar.style.transition = `width ${QUESTION_TIME}s linear`;
-        UI.timerBar.style.width      = '0%';
-        beginInterval();
-      }
-    } else {
-      beginInterval();
+    if (refill && UI.timerBar) {
+      // Animate bar back to full, then start countdown
+      UI.timerBar.getBoundingClientRect();
+      UI.timerBar.style.transition = `width ${REFILL_MS}ms ease-out`;
+      UI.timerBar.style.width = '100%';
+      refillTimerId = setTimeout(beginCountdown, REFILL_MS);
+      return;
     }
+    beginCountdown();
   }
 
-  // ================================================================
-  // QUESTION LOAD
-  // ================================================================
-
+  // ── Question lifecycle ────────────────────────────────────────────
   function resetQuestion(qEl) {
     getAnswerBtns(qEl).forEach(btn => {
       btn.setAttribute('data-selected', 'false');
       btn.setAttribute('data-locked',   'false');
       btn.removeAttribute('data-correct');
     });
-
     const feedbackWrap   = el('feedback-msg',    qEl);
     const feedbackAnswer = el('feedback-answer', qEl);
-    if (feedbackWrap)   feedbackWrap.setAttribute('data-disabled', 'true');
-    if (feedbackWrap)   feedbackWrap.removeAttribute('data-feedback-correct');
-    if (feedbackAnswer) feedbackAnswer.textContent = '';
-
+    if (feedbackWrap)   { feedbackWrap.setAttribute('data-disabled', 'true'); feedbackWrap.removeAttribute('data-feedback-correct'); }
+    if (feedbackAnswer)   feedbackAnswer.textContent = '';
     const hintText = el('hint-text', qEl);
     if (hintText) hintText.style.display = 'none';
   }
@@ -278,9 +176,8 @@
     questionEls.forEach((q, i) => {
       if (i === index) {
         show(q);
-        // Restart animation so it plays on every question transition
         q.style.animation = 'none';
-        q.getBoundingClientRect(); // force reflow
+        q.getBoundingClientRect();
         q.style.animation = '';
       } else {
         hide(q);
@@ -292,13 +189,11 @@
     currentIndex = index;
     selectedEl   = null;
     locked       = false;
-
     const qEl = currentQ();
     if (!qEl) return;
-
     hide(timeoutOverlay);
-    shuffleAnswers(qEl);   // shuffle first — new order each load
-    resetQuestion(qEl);    // then reset state on the (now shuffled) buttons
+    shuffleAnswers(qEl);
+    resetQuestion(qEl);
     showOnlyQuestion(index);
     updateProgress();
     setDisabled(getSubmitBtn(), true);
@@ -307,75 +202,48 @@
     if (withTimer) startTimer(index > 0);
   }
 
-  // ================================================================
-  // HINT
-  // ================================================================
-
+  // ── Hint ──────────────────────────────────────────────────────────
   function initHint(qEl) {
     const hintBtn  = el('hint-btn',  qEl);
     const hintText = el('hint-text', qEl);
     if (!hintBtn || !hintText) return;
-
-    hintText.removeAttribute('hidden');   // strip hidden="" from Webflow HTML
-    hintText.style.display = 'none';      // hide via inline style instead
-    let hintVisible = false;
-
+    hintText.removeAttribute('hidden');
+    hintText.style.display = 'none';
+    let visible = false;
     const fresh = hintBtn.cloneNode(true);
     hintBtn.parentNode.replaceChild(fresh, hintBtn);
-    fresh.addEventListener('click', () => {
-      hintVisible = !hintVisible;
-      hintText.style.display = hintVisible ? 'block' : 'none';
-    });
+    fresh.addEventListener('click', () => { visible = !visible; hintText.style.display = visible ? 'block' : 'none'; });
   }
 
-  // ================================================================
-  // ANSWER SELECTION
-  // Tracks the selected element directly — index-independent,
-  // so shuffling never breaks correctness checking.
-  // ================================================================
-
+  // ── Answer selection ──────────────────────────────────────────────
   function selectAnswer(btn) {
     selectedEl = btn;
-    const qEl = currentQ();
-    if (!qEl) return;
-    getAnswerBtns(qEl).forEach(b => {
-      b.setAttribute('data-selected', b === btn ? 'true' : 'false');
-    });
+    getAnswerBtns(currentQ()).forEach(b => b.setAttribute('data-selected', b === btn ? 'true' : 'false'));
     setDisabled(getSubmitBtn(), false);
   }
 
-  // ================================================================
-  // REVEAL ANSWERS
-  // ================================================================
-
+  // ── Reveal ────────────────────────────────────────────────────────
   function revealAnswers(qEl) {
     const correctEl = getCorrectEl();
     getAnswerBtns(qEl).forEach(btn => {
       btn.setAttribute('data-locked',  'true');
       btn.setAttribute('data-correct', btn === correctEl ? 'true' : 'false');
     });
-    // Always mark the correct answer as selected so Webflow's highlight
-    // styles fire on it even when the user picked a wrong answer
     if (correctEl) correctEl.setAttribute('data-selected', 'true');
   }
 
-  // ================================================================
-  // SUBMIT
-  // ================================================================
-
+  // ── Submit ────────────────────────────────────────────────────────
   function onSubmit() {
     if (locked || !selectedEl) return;
     stopTimer();
     locked = true;
-
-    const qEl       = currentQ();
+    const qEl = currentQ();
     if (!qEl) return;
-
     const isCorrect = selectedEl === getCorrectEl();
     revealAnswers(qEl);
 
-    const points = isCorrect ? Math.max(0, timeRemaining) : 0;
     if (isCorrect) {
+      const points    = Math.max(0, timeRemaining);
       const prevScore = totalScore;
       totalScore += points;
       countUp(UI.scoreDisplay, prevScore, totalScore, 600);
@@ -389,7 +257,7 @@
     }
     if (feedbackAnswer) {
       feedbackAnswer.textContent = isCorrect
-        ? `Correct! +${points} points`
+        ? `Correct! +${Math.max(0, timeRemaining)} points`
         : `Not quite. The correct answer is ${getCorrectText()}`;
     }
 
@@ -397,15 +265,11 @@
     setDisabled(getNextBtn(),   false);
   }
 
-  // ================================================================
-  // TIMEOUT
-  // ================================================================
-
+  // ── Timeout ───────────────────────────────────────────────────────
   function onTimeout() {
     locked = true;
     const qEl = currentQ();
     if (!qEl) return;
-
     revealAnswers(qEl);
     if (UI.timeoutAnswerSpan) UI.timeoutAnswerSpan.textContent = getCorrectText();
     setDisabled(getSubmitBtn(), true);
@@ -413,14 +277,11 @@
     show(timeoutOverlay);
   }
 
-  // ================================================================
-  // NEXT / END
-  // ================================================================
-
+  // ── Navigation ────────────────────────────────────────────────────
   function goNext() {
     hide(timeoutOverlay);
     const next = currentIndex + 1;
-    if (next >= TOTAL_QUESTIONS) { endQuiz(); } else { loadQuestion(next); }
+    if (next >= TOTAL_QUESTIONS) endQuiz(); else loadQuestion(next);
   }
 
   function endQuiz() {
@@ -431,10 +292,7 @@
     show(screenResults);
   }
 
-  // ================================================================
-  // RESET / TRY AGAIN
-  // ================================================================
-
+  // ── Reset ─────────────────────────────────────────────────────────
   function resetQuiz() {
     stopTimer();
     currentIndex  = 0;
@@ -447,112 +305,55 @@
     hide(timeoutOverlay);
     hide(timerWrap);
 
-    if (timerWrap)    timerWrap.setAttribute('data-warning',  'false');
-    if (timerWrap)    timerWrap.setAttribute('data-critical', 'false');
-    if (UI.timerText) UI.timerText.textContent = String(QUESTION_TIME);
-    if (UI.timerBar)  { UI.timerBar.style.transition = 'none'; UI.timerBar.style.width = '100%'; }
+    if (timerWrap)       timerWrap.setAttribute('data-warning', 'false');
+    if (timerWrap)       timerWrap.setAttribute('data-critical', 'false');
+    if (UI.timerText)    UI.timerText.textContent = String(QUESTION_TIME);
+    if (UI.timerBar)     { UI.timerBar.style.transition = 'none'; UI.timerBar.style.width = '100%'; }
     if (UI.scoreDisplay) UI.scoreDisplay.textContent = '0';
 
     show(screenQuiz);
-    show(screenInstructions);  // instructions back on top
-    loadQuestion(0, false);    // reload Q1 behind instructions, no timer
+    show(screenInstructions);
+    loadQuestion(0, false);
   }
 
-  // ================================================================
-  // START QUIZ
-  // ================================================================
-
+  // ── Start ─────────────────────────────────────────────────────────
   function startQuiz() {
     totalScore = 0;
     if (UI.scoreDisplay) UI.scoreDisplay.textContent = '0';
-
     hide(screenInstructions);
     show(timerWrap);
-    // Q1 is already loaded and visible behind the instructions overlay —
-    // just start the timer
     startTimer();
   }
 
-  // ================================================================
-  // CLICK DELEGATION
-  // One listener handles answers, submit and next for all questions.
-  // ================================================================
+  // ── Click delegation ──────────────────────────────────────────────
+  screenQuiz.addEventListener('click', e => {
+    if (e.target.closest('[data-quiz-element="submit-btn"]')) { onSubmit(); return; }
+    if (e.target.closest('[data-quiz-element="next-btn"]')) {
+      const btn = getNextBtn();
+      if (btn && !btn.disabled) goNext();
+      return;
+    }
+    if (locked) return;
+    const btn = e.target.closest('[data-quiz-element="answer"]');
+    const qEl = currentQ();
+    if (!btn || !qEl || !qEl.contains(btn)) return;
+    selectAnswer(btn);
+  });
 
-  function bindQuizClicks() {
-    screenQuiz.addEventListener('click', e => {
-      const qEl = currentQ();
-
-      if (e.target.closest('[data-quiz-element="submit-btn"]')) {
-        onSubmit();
-        return;
-      }
-
-      if (e.target.closest('[data-quiz-element="next-btn"]')) {
-        const nextBtn = getNextBtn();
-        if (nextBtn && !nextBtn.disabled) goNext();
-        return;
-      }
-
-      if (locked) return;
-      const btn = e.target.closest('[data-quiz-element="answer"]');
-      if (!btn || !qEl || !qEl.contains(btn)) return;
-      selectAnswer(btn); // pass element — no index needed
-    });
-  }
-
-  // ================================================================
-  // INIT
-  // ================================================================
-
-  // ================================================================
-  // TRANSITIONS
-  // Inject a <style> block so Webflow's data-attribute-driven states
-  // animate smoothly without touching the Designer.
-  // ================================================================
-
-  function injectTransitionStyles() {
-    const style = document.createElement('style');
-    style.textContent = `
-      @keyframes quiz-question-enter {
-        from { opacity: 0; transform: translateY(5%); }
-        to   { opacity: 1; transform: translateY(0);    }
-      }
-      [data-quiz-element="question"][data-visibility="True"] {
-        animation: quiz-question-enter 0.4s ease-out both;
-      }
-      .wih1-answer_wrap {
-        transition: background-color 0.25s ease, border-color 0.25s ease, color 0.25s ease, opacity 0.25s ease, transform 0.2s ease;
-      }
-      .wih1-answer_wrap:hover:not([data-locked="true"]) {
-        transform: translateY(-1px);
-      }
-      .wih1-answer_wrap:active:not([data-locked="true"]) {
-        transform: translateY(0px);
-        transition-duration: 0.1s;
-      }
-      .wih1-answer_icon-inner,
-      .wih1-answer_icon-outer {
-        transition: background-color 0.25s ease, border-color 0.25s ease, color 0.25s ease;
-      }
-      .wih1-answer_icon-incorrect,
-      .wih1-answer_icon-correct {
-        transition: opacity 0.2s ease;
-      }
-      .wih1-radio_text {
-        transition: color 0.25s ease;
-      }
-      .wih1-timer_wrap[data-critical="true"] [data-quiz-element="timer-bar"] {
-        background-color: #F15A22;
-      }
-    `;
-    document.head.appendChild(style);
+  // ── Init ──────────────────────────────────────────────────────────
+  function setBaseline() {
+    show(screenQuiz);
+    show(screenInstructions);
+    hide(screenResults);
+    hide(timeoutOverlay);
+    hide(timerWrap);
+    if (UI.scoreDisplay) UI.scoreDisplay.textContent = '0';
+    loadQuestion(0, false);
   }
 
   function init() {
-    injectTransitionStyles();
-    prepareAllQuestions(); // read + strip data-correct before anything is visible
+    prepareAllQuestions();
     setBaseline();
-    bindQuizClicks();
 
     if (instructionsBtn)   instructionsBtn.addEventListener('click', startQuiz);
     if (UI.timeoutNextBtn) UI.timeoutNextBtn.addEventListener('click', goNext);
@@ -561,18 +362,13 @@
     if (resultsWrap) {
       new MutationObserver(() => {
         if (resultsWrap.getAttribute('data-visibility') === 'True') {
-          // Delay so the results screen entrance animation completes before
-          // the count-up starts — tune this to match your Webflow IX2 duration
           setTimeout(() => countUp(UI.finalScore, 0, totalScore, 1000), 600);
         }
       }).observe(resultsWrap, { attributeFilter: ['data-visibility'] });
     }
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
-  } else {
-    init();
-  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+  else init();
 
 })();
