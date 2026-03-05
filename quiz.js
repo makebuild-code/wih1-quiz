@@ -357,6 +357,14 @@
     hide(screenSplash);
     show(screenQuiz);
     show(screenInstructions);
+    restartAnimation(screenInstructions);
+  }
+
+  function restartAnimation(node) {
+    if (!node) return;
+    node.style.animation = 'none';
+    node.getBoundingClientRect(); // force reflow
+    node.style.animation = '';
   }
 
   // ── Click delegation ──────────────────────────────────────────────
