@@ -153,15 +153,49 @@
   }
 
   // ── Logo swap ─────────────────────────────────────────────────────
+  const LOGO_TRANSITION = 'opacity 0.35s ease, filter 0.35s ease';
+
+  function initLogoStyle(node) {
+    if (!node) return;
+    node.style.transition = LOGO_TRANSITION;
+    node.style.willChange = 'opacity, filter';
+  }
+
+  function logoIn(node) {
+    if (!node) return;
+    node.removeAttribute('hidden');
+    node.setAttribute('data-visibility', 'True');
+    node.style.transition = LOGO_TRANSITION;
+    // Start from blurred/invisible, then animate in on next frame
+    node.style.opacity = '0';
+    node.style.filter  = 'blur(6px)';
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      node.style.opacity = '1';
+      node.style.filter  = 'blur(0px)';
+    }));
+  }
+
+  function logoOut(node, onDone) {
+    if (!node) { if (onDone) onDone(); return; }
+    node.style.transition = LOGO_TRANSITION;
+    node.style.opacity = '0';
+    node.style.filter  = 'blur(6px)';
+    const cleanup = () => {
+      node.setAttribute('data-visibility', 'False');
+      node.style.opacity = '';
+      node.style.filter  = '';
+      if (onDone) onDone();
+    };
+    node.addEventListener('transitionend', cleanup, { once: true });
+  }
+
   function swapLogo(qEl, state) {
     const initial = el('initial-logo', qEl);
     const answer  = el('answer-logo',  qEl);
     if (state === 'initial') {
-      show(initial);
-      hide(answer);
+      logoOut(answer, () => logoIn(initial));
     } else {
-      hide(initial);
-      show(answer);
+      logoOut(initial, () => logoIn(answer));
     }
   }
 
