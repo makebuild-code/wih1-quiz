@@ -163,11 +163,8 @@
     const initial = el('initial-logo', qEl);
     const answer  = el('answer-logo',  qEl);
     const wrap    = initial && initial.parentElement;
-    if (wrap) { wrap.style.position = 'relative'; }
     [initial, answer].forEach(node => {
       if (!node) return;
-      node.style.position   = 'absolute';
-      node.style.inset      = '0';
       node.style.transition = 'none';
       node.removeAttribute('hidden');
     });
