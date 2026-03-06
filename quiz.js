@@ -153,55 +153,56 @@
   }
 
   // ── Logo swap ─────────────────────────────────────────────────────
-  const LOGO_TRANSITION = 'opacity 0.35s ease, filter 0.35s ease';
+  // Both logos are stacked in the same parent via position:absolute.
+  // They crossfade simultaneously — opacity + blur — for a smooth transition.
+  // swapLogo is called ONLY from loadQuestion (→ 'initial') and revealAnswers (→ 'answer').
+  // resetQuestion intentionally does NOT touch logos to avoid the revert-on-wrong-answer bug.
 
-  function initLogoStyle(node) {
-    if (!node) return;
-    node.style.transition = LOGO_TRANSITION;
-    node.style.willChange = 'opacity, filter';
-  }
+  const LOGO_MS   = 480;
+  const LOGO_EASE = 'cubic-bezier(0.4, 0, 0.2, 1)';
+  const LOGO_TRANS = `opacity ${LOGO_MS}ms ${LOGO_EASE}, filter ${LOGO_MS}ms ${LOGO_EASE}`;
 
-  function logoIn(node) {
-    if (!node) return;
-    node.removeAttribute('hidden');
-    node.setAttribute('data-visibility', 'True');
-    node.style.transition = LOGO_TRANSITION;
-    // Start from blurred/invisible, then animate in on next frame
-    node.style.opacity = '0';
-    node.style.filter  = 'blur(6px)';
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      node.style.opacity = '1';
-      node.style.filter  = 'blur(0px)';
-    }));
-  }
+  function initLogos(qEl) {
+    const initial = el('initial-logo', qEl);
+    const answer  = el('answer-logo',  qEl);
+    const wrap    = initial && initial.parentElement;
 
-  function logoOut(node, onDone) {
-    if (!node) { if (onDone) onDone(); return; }
-    node.style.transition = LOGO_TRANSITION;
-    node.style.opacity = '0';
-    node.style.filter  = 'blur(6px)';
-    const cleanup = () => {
-      node.setAttribute('data-visibility', 'False');
-      node.style.opacity = '';
-      node.style.filter  = '';
-      if (onDone) onDone();
-    };
-    node.addEventListener('transitionend', cleanup, { once: true });
+    // Make the wrapper relatively positioned so absolute children stack correctly
+    if (wrap) {
+      wrap.style.position = 'relative';
+      wrap.style.display  = wrap.style.display || 'block';
+    }
+
+    [initial, answer].forEach(node => {
+      if (!node) return;
+      node.style.position = 'absolute';
+      node.style.inset    = '0';
+      node.removeAttribute('hidden');
+    });
+
+    // Set starting state instantly (no animation)
+    if (initial) { initial.style.transition = 'none'; initial.style.opacity = '1'; initial.style.filter = 'blur(0px)'; }
+    if (answer)  { answer.style.transition  = 'none'; answer.style.opacity  = '0'; answer.style.filter  = 'blur(10px)'; }
+
+    // Allow one frame to pass before enabling transitions so init state is never animated
+    requestAnimationFrame(() => {
+      if (initial) initial.style.transition = LOGO_TRANS;
+      if (answer)  answer.style.transition  = LOGO_TRANS;
+    });
   }
 
   function swapLogo(qEl, state) {
     const initial = el('initial-logo', qEl);
     const answer  = el('answer-logo',  qEl);
-    if (state === 'initial') {
-      logoOut(answer, () => logoIn(initial));
-    } else {
-      logoOut(initial, () => logoIn(answer));
-    }
+    const showInitial = state === 'initial';
+
+    if (initial) { initial.style.opacity = showInitial ? '1' : '0'; initial.style.filter = showInitial ? 'blur(0px)' : 'blur(10px)'; }
+    if (answer)  { answer.style.opacity  = showInitial ? '0' : '1'; answer.style.filter  = showInitial ? 'blur(10px)' : 'blur(0px)'; }
   }
 
   // ── Question lifecycle ────────────────────────────────────────────
+  // resetQuestion does NOT touch logos — logo state is owned by loadQuestion + revealAnswers only.
   function resetQuestion(qEl) {
-    swapLogo(qEl, 'initial');
     getAnswerBtns(qEl).forEach(btn => {
       btn.setAttribute('data-selected', 'false');
       btn.setAttribute('data-locked',   'false');
@@ -243,6 +244,7 @@
     hide(timeoutOverlay);
     shuffleAnswers(qEl);
     resetQuestion(qEl);
+    swapLogo(qEl, 'initial'); // reset logo at the start of every fresh question
     showOnlyQuestion(index);
     updateProgress();
     setDisabled(getSubmitBtn(), true);
@@ -279,7 +281,7 @@
       btn.setAttribute('data-correct', btn === correctEl ? 'true' : 'false');
     });
     if (correctEl) correctEl.setAttribute('data-selected', 'true');
-    swapLogo(qEl, 'answer');
+    swapLogo(qEl, 'answer'); // show answer logo whenever the correct answer is revealed
   }
 
   // ── Submit ────────────────────────────────────────────────────────
@@ -387,7 +389,7 @@
       col.style.transition      = 'none';
       col.style.transitionDelay = '0s';
     });
-    screenSplash.getBoundingClientRect(); // force reflow before animating
+    screenSplash.getBoundingClientRect();
     if (colLeft) {
       colLeft.style.transition      = 'opacity 0.6s ease, transform 0.6s ease';
       colLeft.style.transitionDelay = '0s';
@@ -413,7 +415,7 @@
     hide(screenSplash);
     show(screenQuiz);
     show(screenInstructions);
-    screenInstructions.getBoundingClientRect(); // force reflow
+    screenInstructions.getBoundingClientRect();
     if (card) {
       card.style.transition = 'opacity 0.5s ease, transform 0.5s ease';
       card.style.opacity    = '1';
@@ -445,6 +447,8 @@
     hide(timeoutOverlay);
     hide(timerWrap);
     if (UI.scoreDisplay) UI.scoreDisplay.textContent = '0';
+    // Pre-init logos on all questions so transitions are ready from the start
+    questionEls.forEach(qEl => initLogos(qEl));
     loadQuestion(0, false);
     animateSplash();
   }
