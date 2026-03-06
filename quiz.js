@@ -152,8 +152,22 @@
     beginCountdown();
   }
 
+  // ── Logo swap ─────────────────────────────────────────────────────
+  function swapLogo(qEl, state) {
+    const initial = el('initial-logo', qEl);
+    const answer  = el('answer-logo',  qEl);
+    if (state === 'initial') {
+      show(initial);
+      hide(answer);
+    } else {
+      hide(initial);
+      show(answer);
+    }
+  }
+
   // ── Question lifecycle ────────────────────────────────────────────
   function resetQuestion(qEl) {
+    swapLogo(qEl, 'initial');
     getAnswerBtns(qEl).forEach(btn => {
       btn.setAttribute('data-selected', 'false');
       btn.setAttribute('data-locked',   'false');
@@ -231,6 +245,7 @@
       btn.setAttribute('data-correct', btn === correctEl ? 'true' : 'false');
     });
     if (correctEl) correctEl.setAttribute('data-selected', 'true');
+    swapLogo(qEl, 'answer');
   }
 
   // ── Submit ────────────────────────────────────────────────────────
