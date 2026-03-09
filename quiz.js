@@ -321,8 +321,13 @@
     if (UI.timeoutAnswerSpan) UI.timeoutAnswerSpan.textContent = getCorrectText();
     if (UI.timeoutAnswerLogo) {
       const answerLogo = el('answer-logo', qEl);
-      const src = answerLogo && (answerLogo.src || answerLogo.getAttribute('src'));
-      if (src) UI.timeoutAnswerLogo.src = src;
+      if (answerLogo) {
+        const src    = answerLogo.getAttribute('src');
+        const srcset = answerLogo.getAttribute('srcset');
+        if (src)    UI.timeoutAnswerLogo.src = src;
+        if (srcset) UI.timeoutAnswerLogo.setAttribute('srcset', srcset);
+        else        UI.timeoutAnswerLogo.removeAttribute('srcset');
+      }
     }
     setDisabled(getSubmitBtn(), true);
     setDisabled(getNextBtn(),   true);
