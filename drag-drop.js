@@ -1,105 +1,426 @@
 ;(function () {
   'use strict'
 
-  // ─── WHY THIS FILE EXISTS ────────────────────────────────────────────────────
+  // ─── DOUBLE-INIT GUARD ───────────────────────────────────────────────────────
+  // drag-drop.js is loaded twice on this page (once before interact.js, once
+  // after).  Only the first successful initialisation should run.
+  if (window.__wih1DragDropReady) return
+
+  // ─── OVERVIEW ────────────────────────────────────────────────────────────────
   //
-  // quiz.js owns: timer, scoring, question flow, submit/next buttons, feedback.
-  // drag-drop.js owns: drag lift, z-index elevation, drop detection, snap-back,
-  //                    and the wrapper fix that stops logo <img> elements from
-  //                    intercepting pointer events meant for the dragged prop.
+  // This file is a self-contained quiz engine for the drag-drop game variant.
   //
-  // Integration contract (no parallel event system invented):
-  //   - Any drop      → snap prop to zone centre; find the matching
-  //                      [data-quiz-element="answer"] button and fire .click()
-  //                      → quiz.js selectAnswer() (enables submit button)
-  //   - User submits  → quiz.js evaluates correct/wrong, shows feedback
-  //   - No drop       → snap back; no answer selected
-  //   - Quiz locked   → read [data-quiz-element="answer"] data-locked="true"
-  //                      (set by quiz.js revealAnswers() on submit or timeout)
-  //   - Timeout       → detected via data-visibility="True" on the timeout overlay
-  //   - Next question → detected via MutationObserver watching data-visibility on
-  //                      [data-quiz-element="question"] elements
+  // quiz.js is also present but cannot run on this page because it requires
+  // [data-quiz-element="question"] wrappers which Webflow doesn't add here.
+  // All quiz logic (timer, scoring, progress, logo reveal, feedback) is
+  // therefore owned by this file.
+  //
+  // HTML conventions followed (same as quiz.js):
+  //   - data-quiz-element="…"  identifies all functional elements
+  //   - data-visibility="True/False"  controls show/hide
+  //   - data-disabled="true/false"    mirrors button disabled state for CSS
+  //   - data-logo-id="…"             on each logo drop zone
+  //   - data-correct="…"             on the draggable prop (correct logo-id)
+  //
+  // Question detection: uses [data-quiz-element="question"] if present,
+  //   otherwise falls back to .wih1-quiz_item (this page's structure).
 
-  // ─── CONSTANTS ───────────────────────────────────────────────────────────────
+  // ─── WAIT FOR INTERACT.JS ────────────────────────────────────────────────────
+  // interact.js loads after this script on the current page.  Poll until ready.
+  function waitForInteract (cb) {
+    if (typeof interact !== 'undefined') { cb(); return }
+    var t = setInterval(function () {
+      if (typeof interact !== 'undefined') { clearInterval(t); cb() }
+    }, 20)
+  }
 
-  var SNAP_BACK_MS = 350   // ms — spring easing for returning to origin (no-drop)
-  var SNAP_TO_MS   = 250   // ms — ease for snapping prop to drop zone centre
-  var OVERLAP      = 0.3   // 30 % overlap needed to trigger a drop
+  // ─── ELEMENT HELPERS (quiz.js convention) ────────────────────────────────────
 
-  // ─── QUIZ.JS READ-ONLY SIGNALS ───────────────────────────────────────────────
-
-  // quiz.js helper mirror — locate elements by data-quiz-element (same convention)
   function qel (name, root) {
     return (root || document).querySelector('[data-quiz-element="' + name + '"]')
   }
   function qels (name, root) {
     return Array.from((root || document).querySelectorAll('[data-quiz-element="' + name + '"]'))
   }
-
-  // True when quiz.js has locked the current question (submit or timeout fired).
-  // quiz.js sets data-locked="true" on every answer button inside revealAnswers().
-  function isLocked (qEl) {
-    var btn = qEl && qEl.querySelector('[data-quiz-element="answer"]')
-    return btn ? btn.dataset.locked === 'true' : true
+  function show (node) {
+    if (node) { node.setAttribute('data-visibility', 'True'); node.removeAttribute('hidden') }
+  }
+  function hide (node) {
+    if (node) node.setAttribute('data-visibility', 'False')
+  }
+  function setDisabled (btn, disabled) {
+    if (!btn) return
+    btn.disabled = !!disabled
+    btn.setAttribute('data-disabled', disabled ? 'true' : 'false')
   }
 
-  // True when quiz.js has shown the timeout overlay for the current question.
-  function isTimedOut () {
-    var overlay = qel('timeout-overlay')
-    return overlay ? overlay.dataset.visibility === 'True' : false
+  // ─── CONFIGURATION ───────────────────────────────────────────────────────────
+
+  var screenQuiz = qel('screen-quiz')
+  if (!screenQuiz) return
+
+  var QUESTION_TIME = parseInt(screenQuiz.dataset.quizQuestionTime, 10) || 15
+  var MAX_SCORE     = parseInt(screenQuiz.dataset.quizMaxScore,      10) || 0
+
+  // ─── QUESTION DETECTION ──────────────────────────────────────────────────────
+  // Support both [data-quiz-element="question"] (quiz.js pages) and
+  // .wih1-quiz_item (this page's structure), deduped.
+
+  var questionEls = Array.from(document.querySelectorAll(
+    '[data-quiz-element="question"], .wih1-quiz_item'
+  )).filter(function (el, i, arr) { return arr.indexOf(el) === i })
+
+  var TOTAL_QUESTIONS = questionEls.length
+  if (!TOTAL_QUESTIONS) { console.warn('[wih1-drag-drop] No questions found.'); return }
+
+  // ─── UI REFERENCES ───────────────────────────────────────────────────────────
+
+  var timerWrap = document.querySelector('.wih1-timer_wrap')
+  var UI = {
+    progressCurrent: qel('progress-current'),
+    progressTotal:   qel('progress-total'),
+    scoreDisplay:    qel('score-display'),
+    timerBar:        qel('timer-bar'),
+    timerText:       qel('timer-text'),
+    maxScoreDisplay: qel('max-score-display'),
+    finalScore:      qel('final-score'),
   }
 
-  // ─── ANSWER BUTTON LOOKUP ────────────────────────────────────────────────────
-  //
-  // quiz.js tracks the selected answer via [data-quiz-element="answer"] elements.
-  // We need to map a logo-id from the drop zone onto one of those elements.
-  // Three strategies, tried in order:
-  //   1. Explicit  — answer button carries a matching [data-logo-id] attribute
-  //   2. Self       — the logo-drop-zone <img> itself is the answer button
-  //   3. Index      — positional order of .logo-drop-zone matches answer button order
-  //
-  // Whichever Webflow structure is used, at least one strategy will resolve.
-  function findAnswerBtn (qEl, logoId) {
-    // Strategy 1: answer button has data-logo-id attribute
-    var explicit = qEl.querySelector('[data-quiz-element="answer"][data-logo-id="' + logoId + '"]')
-    if (explicit) return explicit
+  // ─── STATE ───────────────────────────────────────────────────────────────────
 
-    // Strategy 2: the logo img itself is also an answer button
-    var self = qEl.querySelector('.logo-drop-zone[data-logo-id="' + logoId + '"][data-quiz-element="answer"]')
-    if (self) return self
+  var currentIndex   = 0
+  var totalScore     = 0
+  var timeRemaining  = QUESTION_TIME
+  var timerId        = null
+  var refillTimerId  = null
+  var locked         = false
+  var selectedLogoId = null   // logo-id the prop is currently resting on
 
-    // Strategy 3: positional index — assumes logo-drop-zones and answer buttons
-    //             are in the same order within the question
-    var zones   = Array.from(qEl.querySelectorAll('.logo-drop-zone'))
-    var answers = qels('answer', qEl)
-    var idx     = zones.findIndex(function (img) { return img.dataset.logoId === logoId })
-    return (idx !== -1 && answers[idx]) ? answers[idx] : null
+  function currentQ () { return questionEls[currentIndex] || null }
+
+  function getSubmitBtn () { return qel('submit-btn', currentQ()) || qel('submit-btn', screenQuiz) }
+  function getNextBtn   () { return qel('next-btn',   currentQ()) || qel('next-btn',   screenQuiz) }
+
+  // ─── CORRECT ANSWER HELPERS ──────────────────────────────────────────────────
+  // Correct answer is defined by data-correct on the prop (e.g. "disney"),
+  // matched against data-logo-id on logo drop zones.  No hardcoding.
+
+  function getCorrectLogoId (qEl) {
+    var prop = qEl.querySelector('.quiz-prop')
+    return prop ? prop.dataset.correct : null
   }
 
-  // ─── DROP ZONE WRAPPING ──────────────────────────────────────────────────────
-  //
-  // Problem: .logo-drop-zone elements are <img> tags. When the dragged prop
-  // passes over them, the browser hands pointer events to the <img>, not to
-  // interact.js's drop zone. Result: drops are missed.
-  //
-  // Fix (runtime only — Webflow HTML is never changed):
-  //   Replace each logo <img> with:
-  //     <div class="wih1-drop-overlay" data-logo-id="…">
-  //       <img class="logo-drop-zone" style="pointer-events:none" …>
-  //     </div>
-  //   The wrapper div becomes the interact.js dropzone target.
-  //   The img keeps pointer-events:none so it never intercepts drops again.
-  //   Idempotent — safe to call more than once on the same question.
+  function getCorrectName (qEl) {
+    var logoId = getCorrectLogoId(qEl)
+    if (!logoId) return ''
+    var el = qEl.querySelector('[data-logo-id="' + logoId + '"]')
+    // Use alt text, a data-name attribute, or fall back to the raw id
+    return el ? (el.getAttribute('alt') || el.dataset.name || logoId) : logoId
+  }
+
+  // ─── COUNT-UP ANIMATION (matches quiz.js implementation) ─────────────────────
+
+  function countUp (el, from, to, duration) {
+    if (!el) return
+    var start = null
+    function step (now) {
+      if (!start) start = now
+      var t     = Math.min((now - start) / duration, 1)
+      var eased = 1 - Math.pow(1 - t, 3)
+      el.textContent = String(Math.round(from + (to - from) * eased))
+      if (t < 1) requestAnimationFrame(step)
+    }
+    requestAnimationFrame(step)
+  }
+
+  // ─── TIMER (matches quiz.js implementation) ───────────────────────────────────
+
+  var REFILL_MS = 400
+
+  function stopTimer () {
+    clearInterval(timerId)
+    clearTimeout(refillTimerId)
+    timerId = refillTimerId = null
+    if (UI.timerBar) {
+      var pct = (parseFloat(getComputedStyle(UI.timerBar).width) /
+                 (UI.timerBar.parentElement ? UI.timerBar.parentElement.offsetWidth : 1) * 100).toFixed(3)
+      UI.timerBar.style.transition = 'none'
+      UI.timerBar.style.width      = pct + '%'
+    }
+  }
+
+  function beginCountdown () {
+    if (UI.timerBar) {
+      UI.timerBar.style.transition = 'none'
+      UI.timerBar.style.width      = '100%'
+      UI.timerBar.getBoundingClientRect()
+      UI.timerBar.style.transition = 'width ' + QUESTION_TIME + 's linear'
+      UI.timerBar.style.width      = '0%'
+    }
+    timerId = setInterval(function () {
+      timeRemaining -= 1
+      if (UI.timerText) UI.timerText.textContent = String(Math.max(0, timeRemaining))
+      if (timerWrap)    timerWrap.setAttribute('data-warning',  timeRemaining <= 5 ? 'true' : 'false')
+      if (timerWrap)    timerWrap.setAttribute('data-critical', timeRemaining <= 3 ? 'true' : 'false')
+      if (timeRemaining <= 0) { stopTimer(); onTimeout() }
+    }, 1000)
+  }
+
+  function startTimer (refill) {
+    stopTimer()
+    timeRemaining = QUESTION_TIME
+    if (UI.timerText) UI.timerText.textContent = String(QUESTION_TIME)
+    if (timerWrap)    timerWrap.setAttribute('data-warning',  'false')
+    if (timerWrap)    timerWrap.setAttribute('data-critical', 'false')
+    if (refill && UI.timerBar) {
+      UI.timerBar.getBoundingClientRect()
+      UI.timerBar.style.transition = 'width ' + REFILL_MS + 'ms ease-out'
+      UI.timerBar.style.width      = '100%'
+      refillTimerId = setTimeout(beginCountdown, REFILL_MS)
+      return
+    }
+    beginCountdown()
+  }
+
+  // ─── LOGO SWAP (matches quiz.js swapLogo / initLogos) ────────────────────────
+  // Both logos sit stacked in the same parent via position:absolute.
+  // 'initial' state: initial-logo visible, answer-logo hidden.
+  // 'answer'  state: answer-logo visible,  initial-logo hidden.
+
+  function initLogos (qEl) {
+    var initial = qel('initial-logo', qEl)
+    var answer  = qel('answer-logo',  qEl)
+    ;[initial, answer].forEach(function (node) {
+      if (!node) return
+      node.style.transition = 'none'
+      node.removeAttribute('hidden')
+    })
+    if (initial) { initial.style.opacity = '1'; initial.style.filter = 'blur(0px)' }
+    if (answer)  { answer.style.opacity  = '0'; answer.style.filter  = 'blur(10px)' }
+    qEl.setAttribute('data-logo-state', 'initial')
+    // Enable transitions after initial paint so first render never animates
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () {
+        var trans = 'opacity 650ms cubic-bezier(0.25,0.1,0.25,1), filter 650ms cubic-bezier(0.25,0.1,0.25,1)'
+        if (initial) initial.style.transition = trans
+        if (answer)  answer.style.transition  = trans
+      })
+    })
+  }
+
+  function swapLogo (qEl, state) {
+    if (qEl.getAttribute('data-logo-state') === state) return
+    qEl.setAttribute('data-logo-state', state)
+    var initial   = qel('initial-logo', qEl)
+    var answer    = qel('answer-logo',  qEl)
+    var toAnswer  = state === 'answer'
+    if (initial) { initial.style.opacity = toAnswer ? '0' : '1'; initial.style.filter = toAnswer ? 'blur(10px)' : 'blur(0px)' }
+    if (answer)  { answer.style.opacity  = toAnswer ? '1' : '0'; answer.style.filter  = toAnswer ? 'blur(0px)'  : 'blur(10px)' }
+  }
+
+  // ─── HINT ─────────────────────────────────────────────────────────────────────
+
+  function initHint (qEl) {
+    var hintBtn  = qel('hint-btn',  qEl)
+    var hintText = qel('hint-text', qEl)
+    if (!hintBtn || !hintText) return
+    hintText.removeAttribute('hidden')
+    hintText.style.display = 'none'
+    var visible = false
+    var fresh = hintBtn.cloneNode(true)
+    hintBtn.parentNode.replaceChild(fresh, hintBtn)
+    fresh.addEventListener('click', function () {
+      visible = !visible
+      hintText.style.display = visible ? 'block' : 'none'
+    })
+  }
+
+  // ─── PROGRESS & FEEDBACK ──────────────────────────────────────────────────────
+
+  function updateProgress () {
+    if (UI.progressCurrent) UI.progressCurrent.textContent = String(currentIndex + 1)
+    if (UI.progressTotal)   UI.progressTotal.textContent   = String(TOTAL_QUESTIONS)
+    if (UI.scoreDisplay)    UI.scoreDisplay.textContent    = String(totalScore)
+    if (UI.maxScoreDisplay) UI.maxScoreDisplay.textContent = String(MAX_SCORE)
+  }
+
+  function showFeedback (qEl, isCorrect, points) {
+    var feedbackWrap   = qel('feedback-msg',    qEl)
+    var feedbackAnswer = qel('feedback-answer', qEl)
+    if (feedbackWrap) {
+      feedbackWrap.setAttribute('data-disabled',         'false')
+      feedbackWrap.setAttribute('data-feedback-correct', isCorrect ? 'true' : 'false')
+    }
+    if (feedbackAnswer) {
+      feedbackAnswer.textContent = isCorrect
+        ? 'Correct! +' + points + ' points'
+        : 'Not quite. The correct answer is ' + getCorrectName(qEl)
+    }
+  }
+
+  function resetFeedback (qEl) {
+    var feedbackWrap   = qel('feedback-msg',    qEl)
+    var feedbackAnswer = qel('feedback-answer', qEl)
+    if (feedbackWrap) {
+      feedbackWrap.setAttribute('data-disabled', 'true')
+      feedbackWrap.removeAttribute('data-feedback-correct')
+    }
+    if (feedbackAnswer) feedbackAnswer.textContent = ''
+  }
+
+  // ─── ANSWER REVEAL ────────────────────────────────────────────────────────────
+
+  function revealAnswers (qEl) {
+    var correctLogoId = getCorrectLogoId(qEl)
+    qels('answer', qEl).forEach(function (btn) {
+      btn.setAttribute('data-locked',  'true')
+      btn.setAttribute('data-correct', btn.dataset.logoId === correctLogoId ? 'true' : 'false')
+    })
+    swapLogo(qEl, 'answer')
+  }
+
+  // ─── SUBMIT ───────────────────────────────────────────────────────────────────
+
+  function onSubmit () {
+    if (locked || !selectedLogoId) return
+    stopTimer()
+    locked = true
+    var qEl = currentQ()
+    if (!qEl) return
+
+    revealAnswers(qEl)
+
+    var isCorrect = selectedLogoId === getCorrectLogoId(qEl)
+    var points    = isCorrect ? Math.max(0, timeRemaining) : 0
+
+    if (isCorrect) {
+      var prev = totalScore
+      totalScore += points
+      countUp(UI.scoreDisplay, prev, totalScore, 600)
+    }
+
+    showFeedback(qEl, isCorrect, points)
+    setDisabled(getSubmitBtn(), true)
+    setDisabled(getNextBtn(),   false)
+  }
+
+  // ─── TIMEOUT ──────────────────────────────────────────────────────────────────
+
+  function onTimeout () {
+    locked = true
+    var qEl = currentQ()
+    if (!qEl) return
+
+    revealAnswers(qEl)
+    showFeedback(qEl, false, 0)
+
+    // Snap prop back to origin if it's mid-drag or placed on a zone
+    var prop = qEl.querySelector('.quiz-prop')
+    if (prop) snapPropBack(prop)
+
+    setDisabled(getSubmitBtn(), true)
+    setDisabled(getNextBtn(),   false)
+  }
+
+  // ─── QUESTION SHOW/HIDE ───────────────────────────────────────────────────────
+
+  function showOnlyQuestion (index) {
+    questionEls.forEach(function (q, i) {
+      if (i === index) {
+        show(q)
+        q.style.animation = 'none'
+        q.getBoundingClientRect()
+        q.style.animation = ''
+      } else {
+        hide(q)
+      }
+    })
+  }
+
+  // ─── LOAD QUESTION ────────────────────────────────────────────────────────────
+
+  function loadQuestion (index, withTimer) {
+    if (withTimer === undefined) withTimer = true
+    currentIndex   = index
+    locked         = false
+    selectedLogoId = null
+
+    var qEl = currentQ()
+    if (!qEl) return
+
+    resetFeedback(qEl)
+    showOnlyQuestion(index)
+    updateProgress()
+    setDisabled(getSubmitBtn(), true)
+    setDisabled(getNextBtn(),   true)
+    initHint(qEl)
+    initLogos(qEl)
+
+    // Reset answer button visual state
+    qels('answer', qEl).forEach(function (btn) {
+      btn.setAttribute('data-selected', 'false')
+      btn.setAttribute('data-locked',   'false')
+      btn.removeAttribute('data-correct')
+    })
+
+    // Re-init drag-drop for this question
+    initQuestion(qEl)
+
+    if (withTimer) startTimer(index > 0)
+  }
+
+  // ─── NAVIGATION ───────────────────────────────────────────────────────────────
+
+  function goNext () {
+    var next = currentIndex + 1
+    if (next >= TOTAL_QUESTIONS) {
+      endQuiz()
+    } else {
+      loadQuestion(next)
+    }
+  }
+
+  function endQuiz () {
+    stopTimer()
+    var resultsEl = qel('results')
+    if (resultsEl) {
+      hide(screenQuiz)
+      if (timerWrap) hide(timerWrap)
+      show(resultsEl)
+      if (UI.finalScore) {
+        setTimeout(function () { countUp(UI.finalScore, 0, totalScore, 1000) }, 600)
+      }
+    }
+  }
+
+  // ─── CLICK DELEGATION ─────────────────────────────────────────────────────────
+
+  screenQuiz.addEventListener('click', function (e) {
+    if (e.target.closest('[data-quiz-element="submit-btn"]')) { onSubmit(); return }
+    if (e.target.closest('[data-quiz-element="next-btn"]')) {
+      var btn = getNextBtn()
+      if (btn && !btn.disabled) goNext()
+    }
+  })
+
+  // ═══════════════════════════════════════════════════════════════════════════════
+  // DRAG-DROP ENGINE
+  // ═══════════════════════════════════════════════════════════════════════════════
+
+  var SNAP_BACK_MS = 350
+  var SNAP_TO_MS   = 250
+  var OVERLAP      = 0.3
+
+  // ─── DROP ZONE WRAPPING ───────────────────────────────────────────────────────
+  // Wraps each .logo-drop-zone <img> in a .wih1-drop-overlay <div> so the img
+  // never intercepts pointer events meant for the dragged prop.  Idempotent.
+
   function wrapDropZones (qEl) {
     qEl.querySelectorAll('.logo-drop-zone').forEach(function (img) {
-      // Skip if already wrapped
       if (img.parentElement.classList.contains('wih1-drop-overlay')) return
-
       var wrapper        = document.createElement('div')
       wrapper.className  = 'wih1-drop-overlay'
-      // Copy logo-id onto the wrapper so interact.js ondrop can read it
       wrapper.dataset.logoId = img.dataset.logoId
-
       img.parentNode.insertBefore(wrapper, img)
       wrapper.appendChild(img)
       img.style.pointerEvents = 'none'
@@ -121,7 +442,6 @@
     prop.style.transform = 'translate(' + x + 'px, ' + y + 'px)'
   }
 
-  // Animate prop back to its natural (0, 0) position with a spring bounce.
   function snapPropBack (prop) {
     prop.style.transition = 'transform ' + SNAP_BACK_MS + 'ms cubic-bezier(0.34, 1.56, 0.64, 1)'
     prop.style.transform  = 'translate(0, 0)'
@@ -132,24 +452,19 @@
     setTimeout(function () { prop.style.transition = '' }, SNAP_BACK_MS)
   }
 
-  // Animate prop to the visual centre of its drop zone.
   function snapPropToZone (prop, zone) {
     var propRect = prop.getBoundingClientRect()
     var zoneRect = zone.getBoundingClientRect()
     var pos      = getPropPos(prop)
-
-    // Additional translate needed to centre prop on zone
-    var offsetX = (zoneRect.left + zoneRect.width  / 2) - (propRect.left + propRect.width  / 2)
-    var offsetY = (zoneRect.top  + zoneRect.height / 2) - (propRect.top  + propRect.height / 2)
-    var finalX  = pos.x + offsetX
-    var finalY  = pos.y + offsetY
-
+    var offsetX  = (zoneRect.left + zoneRect.width  / 2) - (propRect.left + propRect.width  / 2)
+    var offsetY  = (zoneRect.top  + zoneRect.height / 2) - (propRect.top  + propRect.height / 2)
+    var finalX   = pos.x + offsetX
+    var finalY   = pos.y + offsetY
     prop.style.transition = 'transform ' + SNAP_TO_MS + 'ms ease'
     setPropPos(prop, finalX, finalY)
     setTimeout(function () { prop.style.transition = '' }, SNAP_TO_MS)
   }
 
-  // Reset a prop to its original DOM position (no animation — used on question load).
   function resetProp (prop) {
     prop.style.transform     = ''
     prop.style.transition    = ''
@@ -158,144 +473,106 @@
     prop.style.pointerEvents = 'auto'
     prop.setAttribute('data-x', 0)
     prop.setAttribute('data-y', 0)
-    prop.classList.remove('prop--correct', 'prop--wrong', 'prop--over-zone')
+    prop.classList.remove('prop--over-zone')
   }
 
-  // ─── PER-QUESTION INIT ───────────────────────────────────────────────────────
-  //
-  // Called by the MutationObserver whenever quiz.js makes a question visible,
-  // and once on boot for the first question.
+  // ─── PER-QUESTION DRAG-DROP INIT ──────────────────────────────────────────────
+
   function initQuestion (qEl) {
     if (!qEl) return
 
     var prop = qEl.querySelector('.quiz-prop')
     if (!prop) return
 
-    // 1. Reset prop to origin (instant, no animation)
     resetProp(prop)
-
-    // 2. Wrap logo <img> elements in overlay divs (idempotent)
     wrapDropZones(qEl)
 
-    // 3. Clear any stale interact.js bindings (prevents duplicate listeners
-    //    if initQuestion is somehow called twice for the same element)
+    // Tear down stale interact.js bindings
     try { interact(prop).unset() } catch (_) {}
     qEl.querySelectorAll('.wih1-drop-overlay').forEach(function (w) {
       try { interact(w).unset() } catch (_) {}
     })
 
-    // 4. Reset drop zone visual state
+    // Reset drop zone visual state
     qEl.querySelectorAll('.wih1-drop-overlay').forEach(function (w) {
       w.removeAttribute('data-drag-over')
       w.classList.remove('drop-zone--active', 'drop-zone--correct', 'drop-zone--wrong', 'drop-zone--ready')
     })
 
-    // Flag: did interact.js fire ondrop during the current drag gesture?
-    // Checked in the draggable 'end' listener to decide whether to snap back.
-    // Must live in this closure so each question gets a fresh flag.
+    // Flag: did ondrop fire during this drag gesture?
     var dropHandled = false
 
-    // ── Draggable prop ────────────────────────────────────────────────────────
+    // ── Draggable ─────────────────────────────────────────────────────────────
     interact(prop).draggable({
       inertia:    false,
       autoScroll: true,
-
       modifiers: [
-        // Keep the prop inside the viewport on release
         interact.modifiers.restrictRect({ restriction: 'body', endOnly: true })
       ],
-
       listeners: {
         start: function (event) {
-          // Don't start a drag if quiz.js has already locked this question
-          if (isLocked(qEl) || isTimedOut()) {
-            event.interaction.stop()  // abort before any movement occurs
-            return
-          }
-          // ── z-index fix ──────────────────────────────────────────────────
-          // prop needs position:relative so z-index takes effect in the
-          // stacking context; then raise it above all logo images during drag.
-          prop.style.position  = 'relative'
-          prop.style.zIndex    = '1000'
+          if (locked) { event.interaction.stop(); return }
+          // Elevate prop above all logo images during drag
+          prop.style.position   = 'relative'
+          prop.style.zIndex     = '1000'
           prop.style.transition = ''
         },
-
         move: function (event) {
-          // Secondary guard: abort if quiz locks mid-drag (e.g. timeout fires
-          // while the user is holding the prop)
-          if (isLocked(qEl) || isTimedOut()) {
-            snapPropBack(prop)
-            return
-          }
+          if (locked) { snapPropBack(prop); return }
           var pos = getPropPos(prop)
           setPropPos(prop, pos.x + event.dx, pos.y + event.dy)
         },
-
         end: function () {
-          prop.style.zIndex   = ''
-          prop.style.position = ''
           if (!dropHandled) {
-            // Prop was released mid-air with no recognised drop — snap back
+            // Released mid-air — snap back
             snapPropBack(prop)
           }
-          // Always reset for the next drag gesture on this question
+          // If a drop WAS handled, leave position:relative + z-index:1000 so
+          // the prop stays visually on top of the logo it landed on.
           dropHandled = false
         }
       }
     })
 
-    // ── Drop zones (one wrapper div per logo) ────────────────────────────────
+    // ── Drop zones ────────────────────────────────────────────────────────────
     qEl.querySelectorAll('.wih1-drop-overlay').forEach(function (wrapper) {
       interact(wrapper).dropzone({
-        accept:  '.quiz-prop',  // only accept the draggable from this quiz
+        accept:  '.quiz-prop',
         overlap: OVERLAP,
 
         ondropactivate: function () {
-          // A drag started somewhere — prepare all zones
           wrapper.classList.add('drop-zone--ready')
         },
-
         ondragenter: function (event) {
           wrapper.setAttribute('data-drag-over', 'true')
           wrapper.classList.add('drop-zone--active')
           event.relatedTarget.classList.add('prop--over-zone')
         },
-
         ondragleave: function (event) {
           wrapper.removeAttribute('data-drag-over')
           wrapper.classList.remove('drop-zone--active')
           event.relatedTarget.classList.remove('prop--over-zone')
         },
-
         ondrop: function (event) {
-          // Mark drop as handled *first* — the draggable 'end' listener fires
-          // after ondrop, so setting this flag prevents a double snap-back.
           dropHandled = true
-
           wrapper.removeAttribute('data-drag-over')
           wrapper.classList.remove('drop-zone--active', 'drop-zone--ready')
           event.relatedTarget.classList.remove('prop--over-zone')
 
-          // Guard: ignore drop if quiz locked between drag-start and drop
-          if (isLocked(qEl) || isTimedOut()) {
-            snapPropBack(prop)
-            return
-          }
+          if (locked) { snapPropBack(prop); return }
 
-          // ── Any drop: snap prop to zone, register selection ───────────────
-          // Correct-vs-wrong is not evaluated here — that is quiz.js's job
-          // when the user clicks the submit button.
-
-          // Snap prop to the centre of whichever zone it landed on
+          // Record selection and snap prop to zone centre
+          selectedLogoId = wrapper.dataset.logoId
           snapPropToZone(prop, wrapper)
 
-          // Integrate with quiz.js via its own DOM click-event system:
-          // clicking the answer button calls quiz.js's selectAnswer(),
-          // which sets selectedEl and enables the submit button.
-          var answerBtn = findAnswerBtn(qEl, wrapper.dataset.logoId)
-          if (answerBtn) answerBtn.click()
-        },
+          // Mark the corresponding answer element as selected (for CSS states)
+          qels('answer', qEl).forEach(function (btn) {
+            btn.setAttribute('data-selected', btn.dataset.logoId === selectedLogoId ? 'true' : 'false')
+          })
 
+          // Enable submit button — user confirms by clicking it
+          setDisabled(getSubmitBtn(), false)
+        },
         ondropdeactivate: function () {
           wrapper.classList.remove('drop-zone--ready', 'drop-zone--active')
         }
@@ -303,58 +580,24 @@
     })
   }
 
-  // ─── QUESTION CHANGE OBSERVER ────────────────────────────────────────────────
-  //
-  // quiz.js shows/hides questions by setting data-visibility="True/False" on
-  // [data-quiz-element="question"] nodes.  We watch that attribute so we can
-  // call initQuestion whenever a new question becomes visible — this handles
-  // prop reset, interact.js re-binding, and drop zone wrapping.
-  function observeQuestions () {
-    var screenQuiz = qel('screen-quiz')
-    if (!screenQuiz) return
-
-    new MutationObserver(function (mutations) {
-      for (var i = 0; i < mutations.length; i++) {
-        var m = mutations[i]
-        if (
-          m.type === 'attributes' &&
-          m.attributeName === 'data-visibility' &&
-          m.target.dataset.quizElement === 'question' &&
-          m.target.dataset.visibility  === 'True'
-        ) {
-          initQuestion(m.target)
-          break  // only one question visible at a time
-        }
-      }
-    }).observe(screenQuiz, {
-      attributes:      true,
-      attributeFilter: ['data-visibility'],
-      subtree:         true
-    })
-  }
-
-  // ─── BOOT ────────────────────────────────────────────────────────────────────
+  // ─── BOOT ─────────────────────────────────────────────────────────────────────
 
   function init () {
-    if (typeof interact === 'undefined') {
-      console.warn('[wih1-drag-drop] interact.js not found — load it before this script.')
-      return
-    }
+    window.__wih1DragDropReady = true
 
-    // Watch for question transitions driven by quiz.js
-    observeQuestions()
+    // Initialise progress display
+    updateProgress()
 
-    // quiz.js's init() calls loadQuestion(0, false) synchronously, so question 0
-    // will already have data-visibility="True" by the time our DOMContentLoaded
-    // fires.  Init it directly to avoid missing the first question.
-    var firstVisible = document.querySelector('[data-quiz-element="question"][data-visibility="True"]')
-    if (firstVisible) initQuestion(firstVisible)
+    // Buttons start disabled until the user makes a selection / submits
+    setDisabled(getSubmitBtn(), true)
+    setDisabled(getNextBtn(),   true)
+
+    // Load first question — no timer until user is ready
+    // If there's no splash or instructions screen, start the timer immediately
+    var hasGate = qel('splash') || qel('screen-instructions')
+    loadQuestion(0, !hasGate)
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init)
-  } else {
-    init()
-  }
+  waitForInteract(init)
 
 })() // end IIFE
