@@ -443,13 +443,21 @@
   }
 
   function snapPropBack (prop) {
+    // Animate back to the fixed origin (translate 0,0 = the viewport position
+    // captured at drag start), then restore to normal in-flow positioning.
     prop.style.transition = 'transform ' + SNAP_BACK_MS + 'ms cubic-bezier(0.34, 1.56, 0.64, 1)'
     prop.style.transform  = 'translate(0, 0)'
     prop.setAttribute('data-x', 0)
     prop.setAttribute('data-y', 0)
-    prop.style.zIndex    = ''
-    prop.style.position  = ''
-    setTimeout(function () { prop.style.transition = '' }, SNAP_BACK_MS)
+    setTimeout(function () {
+      prop.style.position   = ''
+      prop.style.left       = ''
+      prop.style.top        = ''
+      prop.style.width      = ''
+      prop.style.height     = ''
+      prop.style.zIndex     = ''
+      prop.style.transition = ''
+    }, SNAP_BACK_MS)
   }
 
   function snapPropToZone (prop, zone) {
@@ -468,8 +476,12 @@
   function resetProp (prop) {
     prop.style.transform     = ''
     prop.style.transition    = ''
-    prop.style.zIndex        = ''
     prop.style.position      = ''
+    prop.style.left          = ''
+    prop.style.top           = ''
+    prop.style.width         = ''
+    prop.style.height        = ''
+    prop.style.zIndex        = ''
     prop.style.pointerEvents = 'auto'
     prop.setAttribute('data-x', 0)
     prop.setAttribute('data-y', 0)
@@ -512,10 +524,21 @@
       listeners: {
         start: function (event) {
           if (locked) { event.interaction.stop(); return }
-          // Elevate prop above all logo images during drag
-          prop.style.position   = 'relative'
-          prop.style.zIndex     = '1000'
+          // Switch to position:fixed so the prop escapes any overflow:hidden
+          // ancestor (e.g. the card container) and renders above elements in
+          // sibling columns.  position:relative + z-index only works within
+          // the same stacking context; fixed breaks out entirely.
+          var rect = prop.getBoundingClientRect()
+          prop.style.position   = 'fixed'
+          prop.style.left       = rect.left + 'px'
+          prop.style.top        = rect.top  + 'px'
+          prop.style.width      = rect.width  + 'px'
+          prop.style.height     = rect.height + 'px'
+          prop.style.zIndex     = '9999'
+          prop.style.transform  = 'translate(0, 0)'
           prop.style.transition = ''
+          prop.setAttribute('data-x', 0)
+          prop.setAttribute('data-y', 0)
         },
         move: function (event) {
           if (locked) { snapPropBack(prop); return }
