@@ -44,6 +44,7 @@
     timeoutAnswerLogo: el('timeout-answer-logo'),
     resultsHeadline:   el('results-headline'),
     resultsMessage:    el('results-message'),
+    finalScoreInput:   el('final-score-input'),
   };
 
   const getSubmitBtn = () => el('submit-btn', currentQ()) || el('submit-btn', screenQuiz);
@@ -343,6 +344,35 @@
     if (next >= TOTAL_QUESTIONS) endQuiz(); else loadQuestion(next);
   }
 
+  // ── Score input lock ──────────────────────────────────────────────
+  // Sets the final-score-input value and makes it tamper-resistant:
+  //   • readonly attr  → blocks UI editing
+  //   • Object.defineProperty → makes element.value = x a no-op in the console
+  // A determined user could still call HTMLInputElement.prototype's native
+  // setter directly, but this covers all practical cases.
+  const _nativeInputSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+
+  function lockScoreInput(score) {
+    const input = UI.finalScoreInput;
+    if (!input) return;
+    const strVal = String(score);
+    _nativeInputSetter.call(input, strVal);   // write value via native setter
+    input.setAttribute('readonly', '');
+    Object.defineProperty(input, 'value', {   // shadow instance property
+      configurable: true,                      // keeps it re-lockable on replay
+      get: () => strVal,
+      set: () => {},                           // console assignments silently ignored
+    });
+  }
+
+  function unlockScoreInput() {
+    const input = UI.finalScoreInput;
+    if (!input) return;
+    delete input.value;                        // remove instance shadow → falls back to prototype
+    _nativeInputSetter.call(input, '');
+    input.removeAttribute('readonly');
+  }
+
   function endQuiz() {
     stopTimer();
     hide(screenQuiz);
@@ -354,6 +384,7 @@
       if (UI.resultsHeadline) UI.resultsHeadline.textContent = 'That was a tough one.';
       if (UI.resultsMessage)  UI.resultsMessage.textContent  = 'No points this time, but you can replay the game and improve your score.';
     }
+    lockScoreInput(totalScore);
     show(screenResults);
   }
 
@@ -374,6 +405,7 @@
       const tryAgainWrap = el('try-again-wrap', screenResults);
       if (tryAgainWrap) show(tryAgainWrap);
     }
+    unlockScoreInput();
 
     if (timerWrap)       timerWrap.setAttribute('data-warning',  'false');
     if (timerWrap)       timerWrap.setAttribute('data-critical', 'false');
